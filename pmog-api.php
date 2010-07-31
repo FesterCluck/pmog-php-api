@@ -1,8 +1,14 @@
 <?php
 
-//This code not including json.php authored by Stephen Kraushaar
+//This code not including json.php or dom4to5.php authored by Stephen Kraushaar
+//
+//This work is licensed under the Creative Commons Attribution-Share Alike 3.0 United States License. 
+//To view a copy of this license, visit http://creativecommons.org/licenses/by-sa/3.0/us/
+//or send a letter to Creative Commons, 171 Second Street, Suite 300, San Francisco, California, 94105, USA.
+//
+//
 //Gimme some props, yo.
-//v2.1
+//v2.2
 
 //Includes
 require_once("json.php");
@@ -222,7 +228,8 @@ function LootCrate($url)
 //Get 'Flash' message returned from PMOG
 function GetFlash()
 {
-  $data = GetHUD();
+  global $HudData;
+  $data = $HudData;
   
   if($data['flash']!=null)
   {
@@ -241,7 +248,7 @@ function GetFlash()
 
 //Stash a crate
 
-function StashCrate($url, $dp, $comment, $armor, $crates, $lightposts, $mines, $portals, $nicks, $explode, $lock)
+function StashCrate($url, $dp, $pings, $comment, $armor, $crates, $lightposts, $mines, $portals, $nicks, $keys, $grenades, $watchdogs, $explode, $lock)
 {
   $data = GetHUD();
   $data = PrepareRequest($data, $url);
@@ -256,6 +263,11 @@ function StashCrate($url, $dp, $comment, $armor, $crates, $lightposts, $mines, $
   $data['crate_contents']['tools']['mines'] = $mines;
   $data['crate_contents']['tools']['portals'] = $portals;
   $data['crate_contents']['tools']['st_nicks'] = $nicks;
+  $data['crate_contents']['tools']['skeleton_keys'] = $keys;
+  $data['crate_contents']['tools']['grenades'] = $grenades;
+  $data['crate_contents']['tools']['watchdogs'] = $watchdogs;
+  $data['crate_contents']['pings'] = $pings;
+
   $data['crates']['0']['upgrades'] = array();
   $data['crates']['0']['upgrades']['exploding'] = ($explode) ? 'true':'false';
 
@@ -565,11 +577,12 @@ function Request($requestType, $pdata)
           if ($pdata['crates']['0']['upgrades']['exploding'] == 'false')
           {
               $cratetext .="\"datapoints\": \"".$pdata['crate_contents']['datapoints']."\", ";
+              $cratetext .="\"pings\": \"".$pdata['crate_contents']['pings']."\", ";
           }
           $cratetext .="\"comments\": \"".$pdata['crate_contents']['comment']."\", \"tools\": {";
           if ($pdata['crates']['0']['upgrades']['exploding'] == 'false')
           {
-            $cratetext .="\"armor\": \"".$pdata['crate_contents']['tools']['armor']."\", \"crates\": \"".$pdata['crate_contents']['tools']['crates']."\", \"lightposts\": \"".$pdata['crate_contents']['tools']['lightposts']."\", \"mines\": \"".$pdata['crate_contents']['tools']['mines']."\", \"portals\": \"".$pdata['crate_contents']['tools']['portals']."\", \"st_nicks\": \"".$pdata['crate_contents']['tools']['st_nicks']."\"}}";
+            $cratetext .="\"armor\": \"".$pdata['crate_contents']['tools']['armor']."\", \"crates\": \"".$pdata['crate_contents']['tools']['crates']."\", \"lightposts\": \"".$pdata['crate_contents']['tools']['lightposts']."\", \"mines\": \"".$pdata['crate_contents']['tools']['mines']."\", \"portals\": \"".$pdata['crate_contents']['tools']['portals']."\", \"st_nicks\": \"".$pdata['crate_contents']['tools']['st_nicks']."\", \"skeleton_keys\": \"".$pdata['crate_contents']['tools']['skeleton_keys']."\", \"grenades\": \"".$pdata['crate_contents']['tools']['grenades']."\", \"watchdogs\": \"".$pdata['crate_contents']['tools']['watchdogs']."\"}}";
           } else {
             $cratetext .="}}, \"upgrade\": {\"exploding\": \"true\"}";
           }
@@ -799,7 +812,7 @@ function GetHUD()
 {
   global $HudData;
   global $PMOGusername;
-  if($HudData['user']['user_id'] != $PMOGusername)
+  if(!array_key_exists('user_id', $HudData['user']) || $HudData['user']['login'] != $PMOGusername)
   {
     Login();
   }

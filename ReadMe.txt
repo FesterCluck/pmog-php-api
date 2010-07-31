@@ -1,8 +1,8 @@
-PMOG PHP4 API v2
+PMOG PHP4 API v2.2
 -----------------------------
 Author: Stephen Kraushaar
 Email: skraushaar@gmail.com
-11:27 AM 1/22/2009
+3:42 PM 5/21/2009
 
 
 This API was created to allow a web server to act as a user on PMOG.
@@ -34,7 +34,9 @@ require_once("pmog-api.php");
 
 Available Functions:
 
-StashCrate(string $url, int $dp, string $comment, int $armor, int $crates, int $lightposts, int $mines, int $portals, int $nicks, bool $explode, bool $lock)
+!!!IMPORTANT THIS FUNCTION HAS CHANGED!!!!
+StashCrate(string $url, int $dp, int $pings, string $comment, int $armor, int $crates, int $lightposts, int $mines, int $portals, int $nicks, $skeleton_keys, int $grenades, int $watchdogs, bool $explode, bool $lock)
+
 Stash a crate. Locked crates not yet implemented.
 
 LootCrate(string $url)
@@ -77,7 +79,6 @@ Returns an array containing user events/pmail
 
 GetProfile(string $playername)
 Returns a HudData-like Array object containing the requested player's profile
-
 
 
 ToDo Next Release
