@@ -2,11 +2,15 @@
 
 //This code not including json.php authored by Stephen Kraushaar
 //Gimme some props, yo.
-//v2.0
+//v2.1
 
 //Includes
 require_once("json.php");
 require_once("securelogin.php");
+
+if (PHP_VERSION>='5')
+ require_once('dom4to5.php');
+
 
 //Globals
 $headers = '';
@@ -14,6 +18,8 @@ $cookies = '';
 $json = new Services_JSON();
 $HudData = array();
 $HudData['user'] = array();
+$Debug = false;
+//$LastTimeStamp = gmdate('D, d M Y H:i:s T', mktime(5, 0, 0, gmdate("m")  , gmdate("d")-1, gmdate("Y")));;
 
 //Retrieves PMail/Events
 //Messages.rss
@@ -27,29 +33,93 @@ $HudData['user'] = array();
 // array[#]['author']
 
 function GetEvents()
-{
+{ 
   $pdata = GetHUD();
+
   // Declarations
   $rss = domxml_new_doc('1.0');
   $itemPropertyText = new DomText('1.0');
   $events = array();
-  // Request Events
-  $data = Request("myevents", $pdata);
+  $currentpage=0;
+  $eventcount=0;
+  $data = array();
+
+
+  do {
+   
+   //Increment current page and set $pdata
+   $currentpage+=1;
+   $pdata['page'] = $currentpage;
+   
+   // Request Events
+   $data = Request("myevents", $pdata);
+
+   // Parse XML to an array
+   $rss = domxml_open_mem($data);
+   $items = $rss->get_elements_by_tagname("item");
+   foreach($items as $item) {
+     $itemProperties = $item->get_elements_by_tagname('*');
+     $events[] = array();
+     foreach($itemProperties as $itemProperty) {
+       $itemPropertyText = $itemProperty->first_child();
+       $propertyName = $itemProperty->node_name();
+       $propertyValue = $itemPropertyText->node_value();
+       $events[sizeof($events)-1][$propertyName] = $propertyValue;      
+     }
+   }
+   
+   $countdiff = count($events) - $eventcount;
+   $eventcount = count($events);
+   
+  } while ($countdiff > 0);
   
-  // Parse XML to an array
-  $rss = domxml_open_mem($data);
-  $items = $rss->get_elements_by_tagname("item");
-  foreach($items as $item) {
-    $itemProperties = $item->get_elements_by_tagname('*');
-    $events[] = array();
-    foreach($itemProperties as $itemProperty) {
-      $itemPropertyText = $itemProperty->first_child();
-      $propertyName = $itemProperty->node_name();
-      $propertyValue = $itemPropertyText->node_value();
-      $events[sizeof($events)-1][$propertyName] = $propertyValue;      
-    }
-  }
+  unset($pdata['page']);
   return $events;
+}
+
+function GetContacts()
+{
+  global $json;
+  $contacts = array();
+  $data = GetHUD();
+  $contacts = Request("contacts", $data);
+  $contacts = get_object_vars($json->decode($contacts));
+
+  foreach($contacts['allies'] as $allykey => $ally)
+    $contacts['allies'][$allykey] = get_object_vars($ally);
+  foreach($contacts['rivals'] as $rivalkey => $rival)
+    $contacts['rivals'][$rivalkey] = get_object_vars($rival);
+  foreach($contacts['recently_active'] as $rakey => $ra)
+    $contacts['recently_active'][$rakey] = get_object_vars($ra);
+    
+  return $contacts;
+}
+
+
+function PollMessages()
+{  
+  $data = GetHUD();
+  $data = Request("messages", $data);
+  UpdateHUD($data);
+}
+
+function ReadMsg()
+{
+  $data = GetHUD();
+  $data = Request("read", $data);
+  UpdateHUD($data);
+  usleep(100);  //Artificial rate limiter. TNN's servers can't always keep up.
+}
+
+function DeleteMsg($events)
+{
+  $data = GetHUD();
+  foreach($events as $event)
+  {
+    $data['messages'] = $event;
+    $tmpdata = Request("delete", $data);
+  }
+  return count($events);
 }
 
 //Get a User's Profile
@@ -134,9 +204,19 @@ function LootCrate($url)
   TrackURL($url);
   $data = GetHUD();
   $data = PrepareRequest($data, $url);
-  $data['crates']['0'] = get_object_vars($data['crates']['0']);
-  $data = Request("loot", $data);
-  UpdateHUD($data);
+  if (isset($data['crates'][0]))
+  {
+    $data['crates'][0] = get_object_vars($data['crates'][0]);
+    $cratedata = $data['crates'][0];
+    $data = Request("loot", $data);
+    UpdateHUD($data);
+    $data = GetHUD();
+    if(isset($data['crate_contents']))
+    {
+      $data['crate_contents']['id'] = $cratedata['id'];
+      return $data['crate_contents'];
+    }
+  }
 }
 
 //Get 'Flash' message returned from PMOG
@@ -221,17 +301,74 @@ function LootDPCard($url)
   UpdateHUD($data);
 }
 
+// Grab UID for pages
+// search.json
+//
+// Returns:
+//    array['url']
+//    array['id']
+
+function GetID($url)
+{
+  // Declarations
+  global $json;
+  $data = '';
+  $result = array();
+
+  // Request Url Data
+  $data = Request("search", $url);
+  
+  // parse JSON to array
+  $result = get_object_vars($json->decode($data));
+  return array($result["url"], $result["id"]);
+}
+
+function LogOff()
+{
+  $data = GetHUD(); 
+  $data = Request("logoff", $data);
+  UpdateHUD($data);
+}
+
+
+
+function ChangeUser($username)
+{
+  global $PMOGusername;
+  global $PMOGpassword;
+  global $PMOGCredentials;
+  
+  foreach($PMOGCredentials as $credential)
+  {
+    if($credential['login']==$username)
+    {
+      $PMOGusername = $credential['login'];
+      $PMOGpassword = $credential['password'];
+	break;
+    }
+  }
+}
+
+
+///////////////////////////////////////////////////////////////////
+//Methods listed below were not designed to be called directly.
+///////////////////////////////////////////////////////////////////
+
+
+
 function Request($requestType, $pdata)
 {
   global $headers;
   global $cookies;
+  global $LastTimeStamp;
+  global $Debug;
 
   // Establish the connection and send the request
   switch($requestType) {
     case "login":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"POST /session.json?login=".$pdata['user']['login']."&password=".urlencode($pdata['user']['password'])." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -245,11 +382,41 @@ function Request($requestType, $pdata)
 	  fputs($fp,"Cache-Control: no-cache\r\n\r\n");
           break;
 
+    case "logoff":
+	  $fp = fsockopen("ext.thenethernet.com", 80);
+	  fputs($fp,"POST /session?_method=delete&auth_token=".$pdata['user']['auth_token']."&authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
+	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
+	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
+	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
+	  fputs($fp,"Accept-Encoding: gzip,deflate\r\n");
+	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
+	  fputs($fp,"Connection: close\r\n");
+	  fputs($fp,"X-Requested-With: XMLHttpRequest\r\n");
+	  fputs($fp,"Content-Length: 0\r\n");
+	  fputs($fp,"Content-Type: application/xml; charset=UTF-8\r\n");
+	  fputs($fp,"Pragma: no-cache\r\n");
+	  fputs($fp,"Cache-Control: no-cache\r\n\r\n");
+          break;
+
+    case "contacts":
+	  $fp = fsockopen("ext.thenethernet.com", 80);
+	  fputs($fp,"GET /acquaintances/".$pdata['user']['login'].".json HTTP/1.1\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
+	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
+	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
+	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
+	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
+	  fputs($fp,"Connection: close\r\n");
+	  fputs($fp,"Content-Length: 0\r\n");
+	  fputs($fp,"Cookie:".$cookies."\r\n\r\n");
+	  fputs($fp,"Cache-Control: no-cache\r\n\r\n");
+          break;
+          
     case "myevents":
-         $yesterday = date("D, j M Y g:i:s ", mktime(5, 0, 0, date("m")  , date("d")-1, date("Y")));
-	  $fp = fsockopen("pmog.com", 80);
-	  fputs($fp, "GET /users/".$pdata['user']['login']."/messages.rss HTTP/1.1\r\n");
-	  fputs($fp,"Host: pmog.com\r\n");
+	  $fp = fsockopen("thenethernet.com", 80);
+	  fputs($fp, "GET /users/".$pdata['user']['login']."/messages.rss?page=".$pdata['page']." HTTP/1.1\r\n");
+	  fputs($fp,"Host: thenethernet.com\r\n");
           fputs($fp, "User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n");
 
@@ -257,15 +424,62 @@ function Request($requestType, $pdata)
 	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
 	  fputs($fp,"Connection: close\r\n");
 	  fputs($fp,"Cookie:".$cookies."\r\n\r\n");
-          fputs($fp, "If-Modified-Since: ". $yesterday." GMT\r\n\r\n");
+          //fputs($fp, "If-Modified-Since: ". $LastTimeStamp ."\r\n\r\n");
 	  break;
+	  
+	  
+     case "messages":
+	  $fp = fsockopen("thenethernet.com", 80);
+	  fputs($fp, "GET /users/".$pdata['user']['login']."/messages.json?version=0.6.1&auth_token=".$pdata['user']['auth_token']."&authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
+	  fputs($fp,"Host: thenethernet.com\r\n");
+          fputs($fp, "User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
+	  fputs($fp,"Accept: text/json, text/javascript, */*\r\n");
+
+	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
+	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
+	  fputs($fp,"Connection: close\r\n");
+	  fputs($fp,"Cookie:".$cookies."\r\n\r\n");
+          //fputs($fp, "If-Modified-Since: ". $LastTimeStamp ."\r\n\r\n");
+	  break;
+
+    case "read":
+	  $fp = fsockopen("ext.thenethernet.com", 80);
+	  fputs($fp,"PUT /users/".$pdata['user']['login']."/messages/".$pdata['messages']['0']['id']."/read.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
+	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
+	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
+	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
+	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
+	  fputs($fp,"Connection: close\r\n");
+	  fputs($fp,"X-Requested-With: XMLHttpRequest\r\n");
+	  fputs($fp,"Content-Length: 0\r\n");
+	  fputs($fp,"Content-Type: application/xml; charset=UTF-8\r\n");
+	  fputs($fp,"Pragma: no-cache\r\n");
+	  fputs($fp,"Cache-Control: no-cache\r\n");
+	  fputs($fp,"Cookie:".$cookies."\r\n\r\n");
+          break;
+          
+    case "delete":
+	  $fp = fsockopen("ext.thenethernet.com", 80);
+	  $postphrase = "POST /users/".$pdata['user']['login']."/messages/".substr($pdata['messages']['guid'], -36, 36)."?_method=delete&authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n";
+	  fputs($fp, $postphrase);
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
+	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
+	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
+	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
+	  fputs($fp,"Accept-Charset: ISO-8859-1,utf-8;q=0.7,*;q=0.7\r\n");
+	  fputs($fp,"Connection: close\r\n");
+	  fputs($fp,"X-Requested-With: XMLHttpRequest\r\n");
+	  fputs($fp,"Content-Length: 0\r\n");
+	  fputs($fp,"Cookie:".$cookies."\r\n\r\n");
+          break;
 
     case "search":
           $getPhrase = "GET /locations/search.json";
           $getPhrase .= "?url=".$pdata;
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp, $getPhrase." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"Accept: text/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
 	  fputs($fp,"Accept-Encoding: gzip,deflate\r\n");
@@ -278,9 +492,9 @@ function Request($requestType, $pdata)
 
 
     case "track":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"GET /track.json?version=0.5.11&auth_token=".$pdata['user']['auth_token']."&authenticity_token=".$pdata['user']['authenticity_token']."&url=".$pdata['url']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -295,9 +509,9 @@ function Request($requestType, $pdata)
 
 
     case "mine":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"POST /locations/".$pdata['id']."/mines.json?auth_token=".$pdata['user']['auth_token']."&authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -311,9 +525,9 @@ function Request($requestType, $pdata)
           break;
 
     case "loot":
-	  $fp = fsockopen("ext.pmog.com", 80);
-	  fputs($fp,"PUT /locations/".$pdata['id']."/crates/".$pdata['crates']['0']['id']."/loot.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  $fp = fsockopen("ext.thenethernet.com", 80);
+	  fputs($fp,"PUT /locations/".$pdata['id']."/crates/".$pdata['crates'][0]['id']."/loot.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -328,9 +542,9 @@ function Request($requestType, $pdata)
           break;
 
     case "getcard":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"PUT /locations/".$pdata['id']."/giftcards/".$pdata['giftcards']['0']['id']."/loot.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -345,7 +559,7 @@ function Request($requestType, $pdata)
           break;
           
     case "stash":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
           $stashurl = "POST /locations/".$pdata['id']."/crates.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n";
           $cratetext = "{\"crate\": {";
           if ($pdata['crates']['0']['upgrades']['exploding'] == 'false')
@@ -361,7 +575,7 @@ function Request($requestType, $pdata)
           }
           $cratetext .="}";
 	  fputs($fp,$stashurl);
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -377,7 +591,7 @@ function Request($requestType, $pdata)
           break;
           
     case "portal":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
           $cratetext = "{\"portal\": {";
           $cratetext .="\"title\": \"".$pdata['portals']['title']."\", ";
           $cratetext .="\"destination\": \"".$pdata['portals']['destination']."\", ";
@@ -385,7 +599,7 @@ function Request($requestType, $pdata)
           $cratetext .="\"upgrade\": {";
           $cratetext .="\"give_dp\": ".$pdata['portals']['give_dp']."}}";
 	  fputs($fp,"POST /locations/".$pdata['id']."/portals.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -401,11 +615,11 @@ function Request($requestType, $pdata)
           break;
           
     case "giftcard":
-          $fp = fsockopen("ext.pmog.com", 80);
+          $fp = fsockopen("ext.thenethernet.com", 80);
           $stashurl = "POST /locations/".$pdata['id']."/giftcards.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n";
           $cratetext = "{\"crate\": {\"datapoints\": \"".$pdata['crate_contents']['datapoints']."\", \"comments\": \"".$pdata['crate_contents']['comment']."\", \"tools\": {\"armor\": \"".$pdata['crate_contents']['tools']['armor']."\", \"crates\": \"".$pdata['crate_contents']['tools']['crates']."\", \"lightposts\": \"".$pdata['crate_contents']['tools']['lightposts']."\", \"mines\": \"".$pdata['crate_contents']['tools']['mines']."\", \"portals\": \"".$pdata['crate_contents']['tools']['portals']."\", \"st_nicks\": \"".$pdata['crate_contents']['tools']['st_nicks']."\"}}}";
 	  fputs($fp,$stashurl);
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -421,9 +635,9 @@ function Request($requestType, $pdata)
           break;
 
     case "watchdog":
-          $fp = fsockopen("ext.pmog.com", 80);
+          $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"POST /locations/".$pdata['id']."/watchdogs/attach.json?auth_token=".$pdata['user']['auth_token']."&authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -438,11 +652,11 @@ function Request($requestType, $pdata)
           break;
 
     case "tag":
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
           $tagurl = "POST ".$pdata['url']."/add_tag HTTP/1.1\r\n";
           $posttext = "authenticity_token=".$pdata['user']['authenticity_token']."&tag%5Bname%5D=".urlencode($pdata['tags'][0])."&commit=Tag&_method=put";
 	  fputs($fp,$tagurl);
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -471,9 +685,9 @@ function Request($requestType, $pdata)
             $pmailtext .= "\", ";
           }
           $pmailtext = substr($pmailtext, 0, -2) . "}";
-	  $fp = fsockopen("ext.pmog.com", 80);
+	  $fp = fsockopen("ext.thenethernet.com", 80);
 	  fputs($fp,"POST /users/".$pdata['user']['login']."/messages.json?authenticity_token=".$pdata['user']['authenticity_token']." HTTP/1.1\r\n");
-	  fputs($fp,"Host: ext.pmog.com\r\n");
+	  fputs($fp,"Host: ext.thenethernet.com\r\n");
 	  fputs($fp,"User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -490,9 +704,9 @@ function Request($requestType, $pdata)
 
 
     case "profile":
-	  $fp = fsockopen("pmog.com", 80);
+	  $fp = fsockopen("thenethernet.com", 80);
 	  fputs($fp, "GET /users/".$pdata['login'].".json HTTP/1.1\r\n");
-	  fputs($fp,"Host: pmog.com\r\n");
+	  fputs($fp,"Host: thenethernet.com\r\n");
           fputs($fp, "User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.9.0.3) Gecko/2008092417 Firefox/3.0.3\r\n");
 	  fputs($fp,"Accept: application/json, text/javascript, */*\r\n");
 	  fputs($fp,"Accept-Language: en-us,en;q=0.5\r\n");
@@ -513,11 +727,14 @@ function Request($requestType, $pdata)
   fclose($fp);
 
   //Debug
-  //if($requestType=='stash')
-  //{
-  //print "<br />\r\n------".$requestType."----\r\n<br />";
-  //print $result;
-  //}
+  if($Debug)
+  {
+    print "<br />\r\n------".$requestType."----\r\n<br />";
+    if(isset($postphrase))
+      print $postphrase."<br />";
+    print $result;
+  }
+  
 
 
   // Separate headers from response
@@ -581,7 +798,8 @@ function PrepareRequest($data, $url)
 function GetHUD()
 {
   global $HudData;
-  if($HudData['user']['user_id'] == null)
+  global $PMOGusername;
+  if($HudData['user']['user_id'] != $PMOGusername)
   {
     Login();
   }
@@ -593,30 +811,48 @@ function UpdateHUD($data)
   global $json;
   global $HudData;
 
+  $msgs = array();
+  $msgdata = array();
+  $msgdata["body"] = array();
   $data = get_object_vars($json->decode($data));
   $data['user'] = get_object_vars($data['user']);
   
-  //Message 
+  //Messages
+  if($data['messages']!=null)
+  {
+    foreach($data['messages'] as $pkey => $pmessage)
+    {
+      $msgdata = get_object_vars($pmessage);
+      $msgdata["body"] = get_object_vars($json->decode($msgdata["body"]));
+      $msgs[] = $msgdata;
+    }
+    $data['messages'] = $msgs;
+  }
+  
+  //Flash Message 
   if($data['flash'] != null)
   {
     $data['flash'] = get_object_vars($data['flash']);
   }
   
   //Crate
-  if ($data['crate_contents'] != null)
+  if($data['crate_contents'] != null)
   {
     $data['crate_contents'] = get_object_vars($data['crate_contents']);
   }
   $HudData = $data;
 }  
 
-function Login()
+function Login($login = '', $pass = '')
 {
   // Declarations
   global $PMOGusername;
   global $PMOGpassword;
-  $login = $PMOGusername;
-  $pass = $PMOGpassword;
+  if($login=='')
+  {
+    $login = $PMOGusername;
+    $pass = $PMOGpassword;
+  }
 
   $data = array();
   $data['user'] = array();
@@ -629,28 +865,8 @@ function Login()
   $data = Request("login", $data);
   
   UpdateHUD($data);
-}
-
-// Grab UID for pages
-// search.json
-//
-// Returns:
-//    array['url']
-//    array['id']
-
-function GetID($url)
-{
-  // Declarations
-  global $json;
-  $data = '';
-  $result = array();
-
-  // Request Url Data
-  $data = Request("search", $url);
   
-  // parse JSON to array
-  $result = get_object_vars($json->decode($data));
-  return array($result["url"], $result["id"]);
 }
+
 
 ?>
