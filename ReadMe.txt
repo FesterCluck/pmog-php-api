@@ -1,21 +1,27 @@
-PMOG PHP4 API v2.2
+PMOG PHP4 API v2.3
 -----------------------------
 Author: Stephen Kraushaar
 Email: skraushaar@gmail.com
-3:42 PM 5/21/2009
+12:56 PM 7/31/2010
 
 
-This API was created to allow a web server to act as a user on PMOG.
+This API was created to allow a web server to act as a user on TheNethernet.
 
 Changes
 -----------------------------
+v2.3
 
+Updated for restored server changes. This API runs the casino, so as far as I can tell, fully functional.
+However, this project is no longer maintained since I took on Nova Initia. 
+
+v2.2
 Using Login() is no longer necessary, the API will log in automatically if it does not have HudData.
 
 No creation of silly arrays anymore. All commands should be straight forward, see example.php for examples.
 
 
-Installation:
+
+Installation:
 -----------------------------
 Open securelogin.php and enter the appropriate login credentials.
 
@@ -73,7 +79,8 @@ Strings such as "Crate Stashed!" and most server Error messages
 
 
 
-GetEvents()
+
+GetEvents()
 Returns an array containing user events/pmail
 
 

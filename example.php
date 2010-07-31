@@ -13,7 +13,7 @@ print "<HTML><BODY><PRE>";
 //Test Data
 //I suggest you change the $url variable to your own username for testing
 //--------------------------------------------------------------
-$url = "http://www.pmog.com/users/pmog";
+$url = "http://www.thenethernet.com/users/pmog";
 $dp = 10;
 $comment = "Test";
 $armor = 0;
